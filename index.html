@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' https://cdn.discordapp.com https://media.discordapp.net https://i.scdn.co; connect-src https://api.lanyard.rest; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="referrer" content="strict-origin-when-cross-origin">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Kn</title>
@@ -57,6 +57,19 @@
       <h1 class="nome">Kn</h1>
       <p class="localizacao">São Paulo, Brazil</p>
     </header>
+    <section class="card-discord" aria-label="Agora no Discord" hidden>
+      <div class="dc-perfil">
+        <span class="dc-avatar-box">
+          <img class="dc-avatar" width="52" height="52" alt="">
+          <span class="dc-bolinha"></span>
+        </span>
+        <span class="textos">
+          <span class="servico dc-nome">Discord</span>
+          <span class="usuario dc-status">offline</span>
+        </span>
+      </div>
+      <ul class="dc-atividades"></ul>
+    </section>
     <section class="card-contato" aria-label="Contato">
       <ul class="lista-links">
         <li>

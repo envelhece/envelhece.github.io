@@ -89,3 +89,122 @@ if (pincel) {
     requestAnimationFrame(quadro);
   }
 }
+// card do discord: status, música e jogo via lanyard
+const cardDiscord = document.querySelector(".card-discord");
+
+if (cardDiscord) {
+  const idDiscord = "1463251166967369934";
+  const nomesStatus = { online: "online", idle: "ausente", dnd: "não perturbe", offline: "offline" };
+  const lista = cardDiscord.querySelector(".dc-atividades");
+  let atividadesAtuais = [];
+
+  function criar(tag, classe, texto) {
+    const el = document.createElement(tag);
+    if (classe) el.className = classe;
+    if (texto) el.textContent = texto;
+    return el;
+  }
+
+  function relogio(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const seg = String(s % 60).padStart(2, "0");
+    return h ? `${h}:${String(m).padStart(2, "0")}:${seg}` : `${m}:${seg}`;
+  }
+
+  function imagemAtividade(atividade) {
+    const img = atividade.assets && atividade.assets.large_image;
+    if (!img) return null;
+    if (img.startsWith("mp:external/")) return "https://media.discordapp.net/" + img.slice(3);
+    if (img.startsWith("spotify:")) return "https://i.scdn.co/image/" + img.slice(8);
+    if (atividade.application_id) return `https://cdn.discordapp.com/app-assets/${atividade.application_id}/${img}.png`;
+    return null;
+  }
+
+  function linha(rotulo, titulo, sub, capaUrl, tempos) {
+    const li = criar("li", "dc-atividade");
+    if (capaUrl) {
+      const capa = criar("img", "dc-capa");
+      capa.src = capaUrl;
+      capa.alt = "";
+      capa.width = 52;
+      capa.height = 52;
+      li.append(capa);
+    }
+    const textos = criar("span", "textos");
+    textos.append(criar("span", "dc-rotulo", rotulo), criar("span", "servico", titulo));
+    if (sub) textos.append(criar("span", "usuario", sub));
+    if (tempos) {
+      const tempo = criar("span", "dc-tempo");
+      tempo.dataset.inicio = tempos.start || "";
+      tempo.dataset.fim = tempos.end || "";
+      if (tempos.end) {
+        const barra = criar("span", "dc-barra");
+        barra.append(criar("span"));
+        textos.append(barra);
+      }
+      textos.append(tempo);
+    }
+    li.append(textos);
+    return li;
+  }
+
+  function atualizarTempos() {
+    const agora = Date.now();
+    for (const tempo of lista.querySelectorAll(".dc-tempo")) {
+      const inicio = Number(tempo.dataset.inicio);
+      const fim = Number(tempo.dataset.fim);
+      if (!inicio) continue;
+      if (fim) {
+        tempo.textContent = `${relogio(agora - inicio)} / ${relogio(fim - inicio)}`;
+        const barra = tempo.parentElement.querySelector(".dc-barra span");
+        if (barra) barra.style.width = Math.min(100, ((agora - inicio) / (fim - inicio)) * 100) + "%";
+      } else {
+        tempo.textContent = `há ${relogio(agora - inicio)}`;
+      }
+    }
+  }
+
+  function mostrar(dados) {
+    const usuario = dados.discord_user;
+    const status = dados.discord_status || "offline";
+    const avatar = cardDiscord.querySelector(".dc-avatar");
+    avatar.src = usuario.avatar
+      ? `https://cdn.discordapp.com/avatars/${usuario.id}/${usuario.avatar}.${usuario.avatar.startsWith("a_") ? "gif" : "png"}?size=128`
+      : "https://cdn.discordapp.com/embed/avatars/0.png";
+    cardDiscord.querySelector(".dc-nome").textContent = usuario.global_name || usuario.username;
+    cardDiscord.querySelector(".dc-bolinha").className = "dc-bolinha " + status;
+
+    const personalizado = (dados.activities || []).find((a) => a.type === 4);
+    cardDiscord.querySelector(".dc-status").textContent =
+      (personalizado && personalizado.state) || nomesStatus[status] || status;
+
+    atividadesAtuais = [];
+    if (dados.listening_to_spotify && dados.spotify) {
+      const s = dados.spotify;
+      atividadesAtuais.push(linha("ouvindo spotify", s.song, s.artist.replace(/;/g, ","), s.album_art_url, s.timestamps));
+    }
+    for (const a of dados.activities || []) {
+      if (a.type !== 0) continue;
+      atividadesAtuais.push(linha("jogando", a.name, [a.details, a.state].filter(Boolean).join(" · "), imagemAtividade(a), a.timestamps && { start: a.timestamps.start }));
+    }
+    lista.replaceChildren(...atividadesAtuais);
+    atualizarTempos();
+    cardDiscord.hidden = false;
+  }
+
+  async function buscar() {
+    try {
+      const resposta = await fetch(`https://api.lanyard.rest/v1/users/${idDiscord}`);
+      const json = await resposta.json();
+      if (json.success) mostrar(json.data);
+    } catch (erro) {
+      // sem conexão com a lanyard: o card só não aparece
+    }
+  }
+
+  buscar();
+  setInterval(buscar, 15000);
+  setInterval(atualizarTempos, 1000);
+}
