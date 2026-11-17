@@ -97,7 +97,12 @@
   const normTxt = (s) => String(s).trim().toLowerCase().replace(/\s+/g, ' ').replace(/[.!?]+$/, '');
   function corrigir(q, resp) {
     if (q.t === 'esc') return resp === q.c;
-    if (q.t === 'txt') return q.r.some((r) => normTxt(r) === normTxt(resp));
+    if (q.t === 'txt') {
+      if (q.r.some((r) => normTxt(r) === normTxt(resp))) return true;
+      const m = String(q.q).match(/([\p{L}]*)__([\p{L}]*)/u);
+      if (m) return q.r.some((r) => { const w = normTxt(r), pre = m[1].toLowerCase(), suf = m[2].toLowerCase(); return w.startsWith(pre) && w.endsWith(suf) && normTxt(resp) === w.slice(pre.length, w.length - suf.length); });
+      return false;
+    }
     if (q.t === 'num') {
       const v = lerNumero(resp);
       if (isNaN(v) || Math.abs(v - q.r) > 1e-9 * Math.max(1, Math.abs(q.r))) return false;
