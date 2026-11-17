@@ -25,9 +25,27 @@
 
   /* ---------- estado salvo ---------- */
   const KEY = 'caderno-v1';
-  let S = { notas: {}, erros: [], provas: [], stats: { q: 0, a: 0 } };
+  let S = { notas: {}, erros: [], provas: [], stats: { q: 0, a: 0 }, xp: 0, dias: {} };
   try { S = Object.assign(S, JSON.parse(localStorage.getItem(KEY)) || {}); } catch (e) {}
   const salvar = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
+  const META = 50;
+  const chaveDia = (d) => { d = d || new Date(); return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); };
+  const xpHoje = () => S.dias[chaveDia()] || 0;
+  const nivel = () => Math.floor((S.xp || 0) / 300) + 1;
+  const sequencia = () => { let n = 0; const d = new Date(); if (!S.dias[chaveDia(d)]) d.setDate(d.getDate() - 1); while (S.dias[chaveDia(d)]) { n++; d.setDate(d.getDate() - 1); } return n; };
+  function ganharXP(v) { S.xp = (S.xp || 0) + v; S.dias[chaveDia()] = xpHoje() + v; }
+  function flutuar(txt) { const e = document.createElement('div'); e.className = 'xpfloat'; e.textContent = txt; document.body.appendChild(e); setTimeout(() => e.remove(), 1000); }
+  function confete() {
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const c = document.createElement('canvas'); c.id = 'confete'; c.width = innerWidth; c.height = innerHeight; document.body.appendChild(c);
+    const ctx = c.getContext('2d'), cores = ['#3ddc84', '#9be15d', '#ffffff', '#ffd23d', '#7fb6ff'];
+    const ps = Array.from({ length: 140 }, () => ({ x: innerWidth / 2, y: innerHeight * 0.35, vx: (Math.random() - 0.5) * 14, vy: -Math.random() * 14 - 4, s: Math.random() * 6 + 4, r: Math.random() * 6, c: cores[Math.floor(Math.random() * cores.length)] }));
+    let t = 0; (function f() { ctx.clearRect(0, 0, c.width, c.height); ps.forEach((p) => { p.x += p.vx; p.y += p.vy; p.vy += 0.35; p.r += 0.1; ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.r); ctx.fillStyle = p.c; ctx.fillRect(-p.s / 2, -p.s / 4, p.s, p.s / 2); ctx.restore(); }); if (++t < 110) requestAnimationFrame(f); else c.remove(); })();
+  }
+  const ICO_FOGO = '<svg viewBox="0 0 24 24"><path d="M12 3c1 3 4 4.5 4 9a4 4 0 0 1-8 0c0-2 1-3 2-4 0 2 1 3 2 3 0-3-1-5 0-8z"/></svg>';
+  const ICO_RAIO = '<svg viewBox="0 0 24 24"><path d="M13 3 5 13h6l-1 8 8-10h-6l1-8z"/></svg>';
+  const ICO_NIVEL = '<svg viewBox="0 0 24 24"><path d="M12 3l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.4 6.8 19.1l1-5.8L3.5 9.2l5.9-.9z"/></svg>';
+  const stats = () => `<div class="topo-stats"><span class="pill fogo">${ICO_FOGO}${sequencia()} dia${sequencia() === 1 ? '' : 's'}</span><span class="pill raio">${ICO_RAIO}${S.xp || 0} XP</span><span class="pill nivel">${ICO_NIVEL}Nível ${nivel()}</span></div>`;
   const nota = (id) => (S.notas[id] ? S.notas[id].melhor : null);
   const passou = (id) => (nota(id) ?? -1) >= NOTA_MIN;
   const liberada = (id) => { const l = LICAO[id]; const t = TRILHA[l.materia]; const i = t.indexOf(l); return i <= 0 || passou(t[i - 1].id); };
@@ -97,7 +115,7 @@
   /* ---------- sessão de questões (lição, prova ou treino) ---------- */
   let SES = null;
   function iniciarSessao(cfg) {
-    SES = Object.assign({ i: 0, itens: [], acertos: 0 }, cfg);
+    SES = Object.assign({ i: 0, itens: [], acertos: 0, combo: 0, xp: 0 }, cfg);
     if (!SES.qs.length) { toast('Não tem questões pra montar essa atividade ainda.'); return; }
     mostrarQuestao();
   }
@@ -113,7 +131,7 @@
       corpo = `<div class="campo"><input id="resp" autocomplete="off" autocorrect="off" autocapitalize="${q.up ? 'characters' : 'off'}" spellcheck="false" inputmode="${mode}" placeholder="${esc(q.ph || 'Sua resposta')}">${q.neg ? '<button class="sinal" id="sinal" type="button" aria-label="Colocar ou tirar o sinal de menos">±</button>' : ''}${q.u ? `<span class="unid">${esc(q.u)}</span>` : ''}</div>`;
     }
     app.innerHTML = `<div class="sessao">
-      <div class="topo"><button class="fechar" id="sair" aria-label="Sair">${ICON.x}</button><div class="barra"><i style="width:${(SES.i / tot) * 100}%"></i></div><span class="qnum">${SES.i + 1} de ${tot}</span></div>
+      <div class="topo"><button class="fechar" id="sair" aria-label="Sair">${ICON.x}</button><div class="barra"><i style="width:${(SES.i / tot) * 100}%"></i></div>${SES.combo >= 2 ? `<span class="combo">${SES.combo} seguidas</span>` : ""}<span class="qnum">${SES.i + 1} de ${tot}</span></div>
       <p class="rotulo">${esc(SES.rotulo || '')}${q.de ? ` · ${esc(q.de)}` : ''}</p>
       <h2 class="enunciado${q.g ? ' g' : ''}">${esc(q.q)}</h2>
       ${corpo}
@@ -144,7 +162,7 @@
     if (!naoSei && (resp === null || resp === '')) return;
     SES.feito = true;
     const ok = !naoSei && corrigir(q, resp);
-    if (ok) SES.acertos++;
+    if (ok) { SES.acertos++; SES.combo++; const g = 10 + Math.min(SES.combo - 1, 5) * 2; SES.xp += g; ganharXP(g); flutuar('+' + g + ' XP'); } else SES.combo = 0;
     SES.itens.push({ q, resp: naoSei ? null : resp, ok });
     if (q.t === 'esc') app.querySelectorAll('.opcao').forEach((b) => { const i = +b.dataset.i; b.disabled = true; if (i === q.c) b.classList.add('certa'); else if (i === resp) b.classList.add('errada'); });
     const inp = $('#resp'); if (inp) inp.disabled = true;
@@ -152,10 +170,10 @@
     const passos = q.res.length ? `<ol class="passos">${q.res.map((p) => `<li>${p}</li>`).join('')}</ol>` : '';
     const ultimo = SES.i === SES.qs.length - 1;
     $('#fb').innerHTML = `<div class="feedback ${ok ? 'certo' : 'errado'}">
-      <p class="tit">${ok ? 'Certo.' : naoSei ? 'Sem problema, olha como resolve.' : 'Não foi dessa vez.'}${ok ? '' : ` Resposta certa: ${esc(respCerta(q))}`}</p>
+      <p class="tit">${ok ? (SES.combo >= 3 ? `Certo! ${SES.combo} seguidas.` : AF.pick(['Certo!', 'Boa!', 'Isso aí!', 'Mandou bem!'])) : naoSei ? 'Sem problema, olha como resolve.' : 'Não foi dessa vez.'}${ok ? '' : ` Resposta certa: ${esc(respCerta(q))}`}</p>
       ${passos ? (ok ? `<details><summary>Ver como resolver</summary>${passos}</details>` : `<p class="rotulo" style="margin-top:14px">Como resolver</p>${passos}`) : ''}
       <div class="acoes"><button class="btn" id="cont">${ultimo ? 'Ver resultado' : 'Continuar'}</button></div></div>`;
-    $('#cont').focus();
+    $('#cont').focus(); const fbx = $('#fb .feedback'); fbx.classList.add(ok ? 'pop' : 'shake');
     $('#cont').onclick = () => { SES.i++; if (SES.i >= SES.qs.length) SES.fim(SES); else mostrarQuestao(); };
   }
   document.addEventListener('keydown', (e) => {
@@ -254,27 +272,20 @@
   }
 
   function telaInicio() {
-    const feitas = TODAS.filter((l) => passou(l.id)).length;
-    const notas = Object.values(S.notas).map((x) => x.melhor);
-    const media = notas.length ? notas.reduce((a, b) => a + b, 0) / notas.length : 0;
     const prox = Object.keys(MATERIAS).map(proxima).filter(Boolean);
+    const alvo = prox.slice().sort((x, y) => x.ano - y.ano || TRILHA[x.materia].indexOf(x) - TRILHA[y.materia].indexOf(y))[0];
+    const hoje = xpHoje(), pct = Math.min(100, (hoje / META) * 100);
+    const feitas = TODAS.filter((l) => passou(l.id)).length;
     app.innerHTML = `
-      <h1 class="titulo">Bora estudar</h1>
-      <p class="sub">Cada matéria tem a sua trilha, do 1º ano ao ensino médio. A próxima lição abre quando você tira ${NOTA_MIN} na anterior.</p>
-      <h2 class="secao">Continue de onde parou</h2>
-      <p class="desc">A próxima lição de cada matéria.</p>
-      <div class="lista">${prox.map((l) => linhaLicao(l)).join('') || '<div class="vazio">Você terminou todas as lições disponíveis. Novas lições chegam em breve.</div>'}</div>
-      <h2 class="secao">Provas</h2>
-      <p class="desc">Questões sorteadas do que você já estudou. Os números mudam toda vez.</p>
-      <div class="acoes"><a class="btn" href="#provas">Ver provas</a></div>
-      <h2 class="secao">Seus números</h2>
-      <div class="numeros">
-        <div><span>Lições concluídas</span><span class="lider"></span><b>${feitas} de ${TODAS.length}</b></div>
-        <div><span>Média das notas</span><span class="lider"></span><b>${notas.length ? fmtNota(media) : '—'}</b></div>
-        <div><span>Questões respondidas</span><span class="lider"></span><b>${S.stats.q}</b></div>
-        <div><span>Taxa de acerto</span><span class="lider"></span><b>${S.stats.q ? Math.round((S.stats.a / S.stats.q) * 100) + '%' : '—'}</b></div>
-        <div><span>Provas feitas</span><span class="lider"></span><b>${S.provas.length}</b></div>
-      </div>`;
+      ${stats()}
+      ${alvo ? `<div class="hero"><p class="k">Próxima lição · ${MATERIAS[alvo.materia]}, ${nomeAno(alvo.ano)}</p><h2>${esc(alvo.titulo)}</h2><p>${esc(alvo.resumo || '')} · ${alvo.min} min</p><button class="btn" id="continuar">Continuar</button></div>` : '<div class="vazio">Você terminou todas as lições disponíveis. Novas chegam em breve.</div>'}
+      <div class="meta"><div class="meta-top">Meta de hoje <span>${hoje} / ${META} XP</span></div><div class="meta-bar"><i style="width:0"></i></div>${hoje >= META ? '<p class="desc" style="margin-top:8px;color:#9be15d">Meta batida! Cada lição a mais conta pro seu nível.</p>' : ''}</div>
+      <h2 class="secao">Outras matérias</h2>
+      <p class="desc">${feitas} de ${TODAS.length} lições concluídas.</p>
+      <div class="lista">${prox.filter((l) => l !== alvo).map((l) => linhaLicao(l)).join('')}</div>
+      <div class="acoes" style="margin-top:30px"><a class="btn-sec" href="#provas">Fazer uma prova</a><a class="btn-sec" href="#erros">Treinar erros (${S.erros.length})</a></div>`;
+    requestAnimationFrame(() => { const b = app.querySelector('.meta-bar i'); if (b) b.style.width = pct + '%'; });
+    if (alvo) $('#continuar').onclick = () => (location.hash = '#licao/' + alvo.id);
     ligarLinhas();
   }
 
@@ -322,11 +333,12 @@
     const ant = S.notas[l.id];
     S.notas[l.id] = { melhor: Math.max(ant ? ant.melhor : 0, notaV), ultima: notaV, tent: (ant ? ant.tent : 0) + 1, data: hojeTxt() };
     S.stats.q += s.qs.length; S.stats.a += s.acertos;
+    if (notaV >= NOTA_MIN) { ganharXP(20); s.xp += 20; }
     registrarErros(s.itens, `${MATERIAS[l.materia]} · ${l.titulo}`);
     salvar();
     const t = TRILHA[l.materia]; const prox = t[t.indexOf(l) + 1];
     const titulo = `${MATERIAS[l.materia]}, ${nomeAno(l.ano)}: ${l.titulo}`;
-    telaResultado({ titulo, notaV, itens: s.itens, msgExtra: notaV >= NOTA_MIN ? (prox ? `Lição concluída. Liberou: ${prox.titulo}.` : 'Lição concluída.') : `Pra concluir, precisa de ${NOTA_MIN}. Revê a explicação e tenta de novo.`, refazer: () => (location.hash = '#licao/' + l.id + '/' + Date.now()), prox: notaV >= NOTA_MIN && prox ? prox : null, png: false });
+    telaResultado({ titulo, notaV, itens: s.itens, msgExtra: notaV >= NOTA_MIN ? (prox ? `Lição concluída. Liberou: ${prox.titulo}.` : 'Lição concluída.') : `Pra concluir, precisa de ${NOTA_MIN}. Revê a explicação e tenta de novo.`, refazer: () => (location.hash = '#licao/' + l.id + '/' + Date.now()), prox: notaV >= NOTA_MIN && prox ? prox : null, png: false, xp: s.xp });
   }
 
   function telaResultado(o) {
@@ -336,7 +348,7 @@
     app.innerHTML = `<div class="sessao">
       <p class="meta">${esc(o.titulo)}</p>
       <div class="nota" style="margin-top:12px">${fmtNota(o.notaV)}</div>
-      <p class="sub">${o.itens.length - err.length} de ${o.itens.length} certas. ${esc(o.msgExtra || '')}</p>
+      <p class="sub">${o.itens.length - err.length} de ${o.itens.length} certas. ${esc(o.msgExtra || '')}</p>${o.xp ? `<div class="ganhos"><span class="pill raio">${ICO_RAIO}+${o.xp} XP</span><span class="pill fogo">${ICO_FOGO}${sequencia()} dia${sequencia() === 1 ? '' : 's'} seguidos</span><span class="pill nivel">${ICO_NIVEL}Nível ${nivel()}</span></div>` : ''}
       <div class="acoes">${o.prox ? `<button class="btn" id="prox">Próxima lição</button>` : `<a class="btn" href="#inicio">Voltar pro início</a>`}<button class="btn-sec" id="refazer">${o.png ? 'Fazer outra prova' : 'Refazer'}</button><button class="btn-sec" id="copiar">Copiar relatório</button></div>
       ${o.png ? `<h2 class="secao">Imagem da prova</h2><p class="desc">Baixa a imagem e me manda. No iPhone, toca e segura na imagem pra salvar.</p><img class="img-prova" id="img" alt="Resultado da prova"><div class="acoes"><a class="btn" id="baixar" download="prova-${Date.now()}.png">Baixar PNG</a></div>` : ''}
       ${err.length ? `<h2 class="secao">O que você errou</h2>${err.map((x) => `<div class="erro-card"><b>${esc(plain(x.q.q))}</b><div class="s">Sua resposta: ${esc(respDada(x.q, x.resp))}</div><div class="c">Resposta certa: ${esc(respCerta(x.q))}</div>${x.q.res.length ? `<ol class="passos">${x.q.res.map((p) => `<li>${p}</li>`).join('')}</ol>` : ''}</div>`).join('')}` : ''}
@@ -345,6 +357,7 @@
     $('#refazer').onclick = o.refazer;
     $('#copiar').onclick = (e) => copiar(rel, e.currentTarget);
     if (o.png) { const url = gerarPNG(o.titulo, o.notaV, o.itens); $('#img').src = url; $('#baixar').href = url; }
+    if (o.notaV >= NOTA_MIN) setTimeout(confete, 150);
     window.scrollTo(0, 0);
   }
 
