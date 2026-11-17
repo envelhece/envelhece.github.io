@@ -309,25 +309,36 @@
     ligarLinhas();
   }
 
+  function cartoesTeoria(blocos) {
+    const cards = []; let cur = [];
+    (blocos || []).forEach((b) => { if (b.startsWith('<h2>') && cur.length) { cards.push(cur); cur = []; } cur.push(b); });
+    if (cur.length) cards.push(cur);
+    return cards.map((c) => c.join(''));
+  }
   function telaLicao(id) {
     const l = LICAO[id];
     if (!l) { location.hash = '#inicio'; return; }
     if (!liberada(id)) { toast(`${ICON.chave} Essa lição ainda está trancada.`); location.hash = '#anos/' + l.ano; return; }
-    const n = nota(id);
-    app.innerHTML = `<div class="licao">
-      <button class="voltar" id="volta">${ICON.seta} Voltar</button>
-      <p class="meta">${MATERIAS[l.materia]}, ${nomeAno(l.ano)} · ${l.min} min${n != null ? ` · sua melhor nota: ${fmtNota(n)}` : ''}</p>
-      <h1>${esc(l.titulo)}</h1>
-      <p class="resumo-l">${esc(l.resumo || '')}</p>
-      <div class="teoria">${(l.teoria || []).join('')}</div>
-      <div class="acoes"><button class="btn" id="comecar">Começar exercícios</button></div>
-    </div>`;
-    $('#volta').onclick = () => history.back();
-    $('#comecar').onclick = () => {
-      const qs = montar(l.pratica);
-      iniciarSessao({ qs, rotulo: `${MATERIAS[l.materia]} · ${l.titulo}`, fim: (s) => fimLicao(l, s) });
+    const cards = cartoesTeoria(l.teoria);
+    let k = 0;
+    const comecar = () => iniciarSessao({ qs: montar(l.pratica), rotulo: `${MATERIAS[l.materia]} · ${l.titulo}`, fim: (s) => fimLicao(l, s) });
+    const desenhar = () => {
+      const ultimo = k === cards.length - 1;
+      app.innerHTML = `<div class="licao">
+        <div class="topo"><button class="fechar" id="sair" aria-label="Sair">${ICON.x}</button><div class="barra"><i style="width:${((k + 1) / cards.length) * 100}%"></i></div><span class="qnum">${k + 1} de ${cards.length}</span></div>
+        ${k === 0 ? `<p class="meta">${MATERIAS[l.materia]}, ${nomeAno(l.ano)} · ${l.min} min</p><h1>${esc(l.titulo)}</h1>` : ''}
+        <div class="teoria cartao pop">${cards[k]}</div>
+        <div class="acoes">${k > 0 ? '<button class="btn-sec" id="ant">Voltar</button>' : ''}<button class="btn" id="prox">${ultimo ? 'Começar exercícios' : 'Entendi, próximo'}</button>${nota(id) != null && !ultimo ? '<button class="link" id="pular">Pular pros exercícios</button>' : ''}</div>
+      </div>`;
+      $('#sair').onclick = () => history.back();
+      $('#prox').onclick = () => { if (ultimo) comecar(); else { k++; ganharXP(2); salvar(); flutuar('+2 XP'); desenhar(); window.scrollTo(0, 0); } };
+      if ($('#ant')) $('#ant').onclick = () => { k--; desenhar(); };
+      if ($('#pular')) $('#pular').onclick = comecar;
+      $('#prox').focus();
     };
+    desenhar();
   }
+  document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !SES && document.querySelector('.licao #prox')) { e.preventDefault(); $('#prox').click(); } });
   function fimLicao(l, s) {
     const notaV = (s.acertos / s.qs.length) * 10;
     const ant = S.notas[l.id];

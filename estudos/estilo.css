@@ -168,3 +168,5 @@ textarea.copia{width:100%;min-height:160px;margin-top:12px;background:transparen
 .feedback.errado{background:rgba(232,114,106,.07);border:1px solid rgba(232,114,106,.35);border-radius:12px;padding:18px 20px}
 .btn{border-radius:10px}
 .ganhos{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
+.teoria.cartao{border:1px solid var(--linha2);border-radius:16px;padding:8px 24px 18px;margin-top:18px;background:#0b0b0b}
+.teoria.cartao h2{margin-top:18px}
