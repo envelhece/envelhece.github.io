@@ -25,7 +25,7 @@
 
   /* ---------- estado salvo ---------- */
   const KEY = 'caderno-v1';
-  let S = { notas: {}, erros: [], provas: [], stats: { q: 0, a: 0 }, xp: 0, dias: {} };
+  let S = { notas: {}, erros: [], provas: [], stats: { q: 0, a: 0 }, xp: 0, dias: {}, niv: {} };
   try { S = Object.assign(S, JSON.parse(localStorage.getItem(KEY)) || {}); } catch (e) {}
   const salvar = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
   const META = 50;
@@ -47,7 +47,7 @@
   const ICO_NIVEL = '<svg viewBox="0 0 24 24"><path d="M12 3l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.4 6.8 19.1l1-5.8L3.5 9.2l5.9-.9z"/></svg>';
   const stats = () => `<div class="topo-stats"><span class="pill fogo">${ICO_FOGO}${sequencia()} dia${sequencia() === 1 ? '' : 's'}</span><span class="pill raio">${ICO_RAIO}${S.xp || 0} XP</span><span class="pill nivel">${ICO_NIVEL}Nível ${nivel()}</span></div>`;
   const nota = (id) => (S.notas[id] ? S.notas[id].melhor : null);
-  const passou = (id) => (nota(id) ?? -1) >= NOTA_MIN;
+  const passou = (id) => (nota(id) ?? -1) >= NOTA_MIN || !!(S.niv && S.niv[id]);
   const liberada = (id) => { const l = LICAO[id]; const t = TRILHA[l.materia]; const i = t.indexOf(l); return i <= 0 || passou(t[i - 1].id); };
   const proxima = (m) => TRILHA[m].find((l) => !passou(l.id));
   const fmtNota = (x) => x.toFixed(1).replace('.', ',');
@@ -288,9 +288,10 @@
       <h2 class="secao">Outras matérias</h2>
       <p class="desc">${feitas} de ${TODAS.length} lições concluídas.</p>
       <div class="lista">${prox.filter((l) => l !== alvo).map((l) => linhaLicao(l)).join('')}</div>
-      <div class="acoes" style="margin-top:30px"><a class="btn-sec" href="#provas">Fazer uma prova</a><a class="btn-sec" href="#erros">Treinar erros (${S.erros.length})</a></div>`;
+      <div class="acoes" style="margin-top:30px"><button class="btn-sec" id="niv">Teste de nivelamento</button><a class="btn-sec" href="#provas">Fazer uma prova</a><a class="btn-sec" href="#erros">Treinar erros (${S.erros.length})</a></div>`;
     requestAnimationFrame(() => { const b = app.querySelector('.meta-bar i'); if (b) b.style.width = pct + '%'; });
     if (alvo) $('#continuar').onclick = () => (location.hash = '#licao/' + alvo.id);
+    $('#niv').onclick = nivelamento;
     ligarLinhas();
   }
 
@@ -420,6 +421,37 @@
     } }), 0);
   }
 
+  /* ---------- nivelamento ---------- */
+  function nivelamento() {
+    const mats = Object.keys(MATERIAS).filter((m) => TRILHA[m].length);
+    const res = {};
+    let mi = 0, ano = 0;
+    location.hash = '#nivel';
+    const anosDe = (m) => [...new Set(TRILHA[m].map((l) => l.ano))].sort((x, y) => x - y);
+    const proximoBloco = () => {
+      while (mi < mats.length) {
+        const m = mats[mi], anos = anosDe(m);
+        if (ano < anos.length) {
+          const a = anos[ano], ls = TRILHA[m].filter((l) => l.ano === a);
+          const qs = AF.shuf(ls.flatMap((l) => montar(l.pratica))).slice(0, 3);
+          iniciarSessao({ qs, rotulo: `Nivelamento · ${MATERIAS[m]}, ${nomeAno(a)}`, semDica: true, fim: (s) => {
+            if (s.acertos >= 2) { ls.forEach((l) => (S.niv[l.id] = true)); res[m] = a; ano++; }
+            else { mi++; ano = 0; }
+            salvar(); proximoBloco();
+          } });
+          return;
+        }
+        mi++; ano = 0;
+      }
+      SES = null;
+      app.innerHTML = `<div class="sessao"><h1 class="titulo">Seu nível</h1><p class="sub">Liberei tudo o que você já domina. Agora cada matéria começa onde está o desafio de verdade.</p>
+        <div class="numeros">${mats.map((m) => { const p = proxima(m); return `<div><span>${MATERIAS[m]}</span><span class="lider"></span><b>${p ? 'começa no ' + nomeAno(p.ano) : 'tudo concluído'}</b></div>`; }).join('')}</div>
+        <div class="acoes"><a class="btn" href="#inicio">Começar a estudar</a></div></div>`;
+      setTimeout(confete, 150);
+    };
+    setTimeout(proximoBloco, 0);
+  }
+
   /* ---------- erros ---------- */
   function telaErros() {
     const E = S.erros;
@@ -464,8 +496,8 @@
   function rota() {
     const [p, a] = (location.hash.slice(1) || 'inicio').split('/');
     document.querySelectorAll('#nav a').forEach((x) => (x.getAttribute('data-r') === p || (p === 'licao' && x.dataset.r === 'anos') ? x.setAttribute('aria-current', 'page') : x.removeAttribute('aria-current')));
-    if ((p === 'prova' || p === 'treino') && SES) return;
-    if (p !== 'prova' && p !== 'treino') SES = null;
+    if ((p === 'prova' || p === 'treino' || p === 'nivel') && SES) return;
+    if (p !== 'prova' && p !== 'treino' && p !== 'nivel') SES = null;
     window.scrollTo(0, 0);
     if (p === 'anos') telaAnos(a);
     else if (p === 'licao') telaLicao(a);
