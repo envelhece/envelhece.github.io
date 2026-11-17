@@ -1,0 +1,450 @@
+/* Caderno — motor do site: trilhas por matéria, lições, provas e imagem do resultado. */
+(function () {
+  'use strict';
+  const $ = (s) => document.querySelector(s);
+  const app = $('#app');
+  const NOTA_MIN = 6;
+  const ICON = {
+    chave: '<svg viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 20 3M16 7l2.5 2.5M18.5 4.5 21 7"/></svg>',
+    check: '<svg viewBox="0 0 24 24"><path d="m5 12 4 4 10-10"/></svg>',
+    x: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+    seta: '<svg viewBox="0 0 24 24"><path d="M15 18 9 12l6-6"/></svg>',
+  };
+
+  /* ---------- montar o curso ---------- */
+  const TODAS = [];
+  (window.CURSO || []).forEach((l) => TODAS.push(l));
+  const ordemMat = Object.keys(MAPA_MAT);
+  (AFA.mat || []).forEach((l) => { if (MAPA_MAT[l.id]) { l.materia = 'mat'; l.ano = MAPA_MAT[l.id]; l.ordemExtra = 100 + ordemMat.indexOf(l.id); TODAS.push(l); } });
+  TODAS.forEach((l, i) => { l.pos = l.ordemExtra != null ? l.ordemExtra : i; });
+  const LICAO = {};
+  TODAS.forEach((l) => (LICAO[l.id] = l));
+  const TRILHA = {};
+  Object.keys(MATERIAS).forEach((m) => { TRILHA[m] = TODAS.filter((l) => l.materia === m).sort((a, b) => a.ano - b.ano || a.pos - b.pos); });
+  const nomeAno = (n) => (ANOS.find((a) => a.n === n) || {}).nome || n + 'º ano';
+
+  /* ---------- estado salvo ---------- */
+  const KEY = 'caderno-v1';
+  let S = { notas: {}, erros: [], provas: [], stats: { q: 0, a: 0 } };
+  try { S = Object.assign(S, JSON.parse(localStorage.getItem(KEY)) || {}); } catch (e) {}
+  const salvar = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
+  const nota = (id) => (S.notas[id] ? S.notas[id].melhor : null);
+  const passou = (id) => (nota(id) ?? -1) >= NOTA_MIN;
+  const liberada = (id) => { const l = LICAO[id]; const t = TRILHA[l.materia]; const i = t.indexOf(l); return i <= 0 || passou(t[i - 1].id); };
+  const proxima = (m) => TRILHA[m].find((l) => !passou(l.id));
+  const fmtNota = (x) => x.toFixed(1).replace('.', ',');
+  const hojeTxt = () => new Date().toLocaleDateString('pt-BR');
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const plain = (s) => String(s).replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ');
+
+  function toast(msg) {
+    const t = $('#toast');
+    t.innerHTML = msg;
+    t.classList.add('on');
+    clearTimeout(toast.h);
+    toast.h = setTimeout(() => t.classList.remove('on'), 3200);
+  }
+
+  /* ---------- questões ---------- */
+  function montar(spec) {
+    const out = [];
+    for (const it of spec || []) {
+      if (it.gen) {
+        const vistos = new Set();
+        let k = 0, tent = 0;
+        while (k < it.n && tent < 60) { tent++; const q = it.gen(); if (vistos.has(q.q) && tent < 40) continue; vistos.add(q.q); out.push(q); k++; }
+      } else if (it.pool) AF.shuf(it.pool).slice(0, it.n).forEach((q) => out.push(q));
+      else out.push(it);
+    }
+    return out.map(preparar);
+  }
+  function preparar(q) {
+    q = Object.assign({}, q);
+    q.res = Array.isArray(q.res) ? q.res : q.res ? [q.res] : [];
+    if (q.t === 'esc') {
+      const mix = AF.shuf(q.o.map((t, i) => [t, i === q.c]));
+      q.o = mix.map((v) => v[0]);
+      q.c = mix.findIndex((v) => v[1]);
+    }
+    return q;
+  }
+  function lerNumero(s) {
+    s = String(s).trim().replace(/\s/g, '').replace(/[−–]/g, '-').replace(/[^\d,./-]/g, '');
+    if (!s) return NaN;
+    if (s.includes('/')) { const [a, b] = s.split('/'); const A = lerNumero(a), B = lerNumero(b); return B ? A / B : NaN; }
+    if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+    else if (/^-?\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '');
+    return Number(s);
+  }
+  const normTxt = (s) => String(s).trim().toLowerCase().replace(/\s+/g, ' ').replace(/[.!?]+$/, '');
+  function corrigir(q, resp) {
+    if (q.t === 'esc') return resp === q.c;
+    if (q.t === 'txt') return q.r.some((r) => normTxt(r) === normTxt(resp));
+    if (q.t === 'num') {
+      const v = lerNumero(resp);
+      if (isNaN(v) || Math.abs(v - q.r) > 1e-9 * Math.max(1, Math.abs(q.r))) return false;
+      if (q.irr) {
+        const s = String(resp).trim().replace(/[−–]/g, '-');
+        if (s.includes('/')) { const [a, b] = s.split('/').map((x) => Math.abs(lerNumero(x))); if (AF.gcd(a, b) !== 1 || b === 1) return false; }
+      }
+      return true;
+    }
+    return true;
+  }
+  const respCerta = (q) => (q.t === 'esc' ? q.o[q.c] : q.t === 'txt' ? q.r[0] : q.rTxt || AF.n(+(+q.r).toFixed(6)));
+  const respDada = (q, r) => (r === null || r === undefined || r === '' ? 'não respondeu' : q.t === 'esc' ? q.o[r] : String(r));
+
+  /* ---------- sessão de questões (lição, prova ou treino) ---------- */
+  let SES = null;
+  function iniciarSessao(cfg) {
+    SES = Object.assign({ i: 0, itens: [], acertos: 0 }, cfg);
+    if (!SES.qs.length) { toast('Não tem questões pra montar essa atividade ainda.'); return; }
+    mostrarQuestao();
+  }
+  function mostrarQuestao() {
+    const q = SES.qs[SES.i];
+    SES.resp = null; SES.feito = false;
+    const tot = SES.qs.length;
+    let corpo = '';
+    if (q.t === 'esc') {
+      corpo = `<div class="opcoes" role="group">${q.o.map((t, i) => `<button class="opcao" data-i="${i}" aria-pressed="false"><span class="letra">${'ABCDE'[i]}</span><span>${esc(t)}</span></button>`).join('')}</div>`;
+    } else {
+      const mode = q.t === 'num' && !q.fr && !q.neg ? 'decimal' : 'text';
+      corpo = `<div class="campo"><input id="resp" autocomplete="off" autocorrect="off" autocapitalize="${q.up ? 'characters' : 'off'}" spellcheck="false" inputmode="${mode}" placeholder="${esc(q.ph || 'Sua resposta')}">${q.neg ? '<button class="sinal" id="sinal" type="button" aria-label="Colocar ou tirar o sinal de menos">±</button>' : ''}${q.u ? `<span class="unid">${esc(q.u)}</span>` : ''}</div>`;
+    }
+    app.innerHTML = `<div class="sessao">
+      <div class="topo"><button class="fechar" id="sair" aria-label="Sair">${ICON.x}</button><div class="barra"><i style="width:${(SES.i / tot) * 100}%"></i></div><span class="qnum">${SES.i + 1} de ${tot}</span></div>
+      <p class="rotulo">${esc(SES.rotulo || '')}${q.de ? ` · ${esc(q.de)}` : ''}</p>
+      <h2 class="enunciado${q.g ? ' g' : ''}">${esc(q.q)}</h2>
+      ${corpo}
+      <div class="acoes" id="acoes"><button class="btn" id="verificar" disabled>Verificar</button><button class="btn-sec" id="naosei">Não sei</button>${q.dica && !SES.semDica ? '<button class="link" id="dica">Ver dica</button>' : ''}</div>
+      <div id="dicabox"></div><div id="fb"></div></div>`;
+    $('#sair').onclick = () => { SES = null; history.back(); };
+    const inp = $('#resp');
+    if (inp) {
+      inp.focus();
+      inp.oninput = () => { $('#verificar').disabled = !inp.value.trim(); };
+      if ($('#sinal')) $('#sinal').onclick = () => { inp.value = inp.value.startsWith('-') || inp.value.startsWith('−') ? inp.value.slice(1) : '−' + inp.value; inp.focus(); inp.oninput(); };
+    } else {
+      app.querySelectorAll('.opcao').forEach((b) => (b.onclick = () => escolher(+b.dataset.i)));
+    }
+    $('#verificar').onclick = () => verificar(inp ? inp.value : SES.resp);
+    $('#naosei').onclick = () => verificar(null, true);
+    if ($('#dica')) $('#dica').onclick = () => { $('#dicabox').innerHTML = `<div class="dica-box">${esc(q.dica)}</div>`; $('#dica').remove(); };
+  }
+  function escolher(i) {
+    if (SES.feito) return;
+    SES.resp = i;
+    app.querySelectorAll('.opcao').forEach((b) => b.setAttribute('aria-pressed', +b.dataset.i === i ? 'true' : 'false'));
+    $('#verificar').disabled = false;
+  }
+  function verificar(resp, naoSei) {
+    if (SES.feito) return;
+    const q = SES.qs[SES.i];
+    if (!naoSei && (resp === null || resp === '')) return;
+    SES.feito = true;
+    const ok = !naoSei && corrigir(q, resp);
+    if (ok) SES.acertos++;
+    SES.itens.push({ q, resp: naoSei ? null : resp, ok });
+    if (q.t === 'esc') app.querySelectorAll('.opcao').forEach((b) => { const i = +b.dataset.i; b.disabled = true; if (i === q.c) b.classList.add('certa'); else if (i === resp) b.classList.add('errada'); });
+    const inp = $('#resp'); if (inp) inp.disabled = true;
+    $('#acoes').innerHTML = '';
+    const passos = q.res.length ? `<ol class="passos">${q.res.map((p) => `<li>${p}</li>`).join('')}</ol>` : '';
+    const ultimo = SES.i === SES.qs.length - 1;
+    $('#fb').innerHTML = `<div class="feedback ${ok ? 'certo' : 'errado'}">
+      <p class="tit">${ok ? 'Certo.' : naoSei ? 'Sem problema, olha como resolve.' : 'Não foi dessa vez.'}${ok ? '' : ` Resposta certa: ${esc(respCerta(q))}`}</p>
+      ${passos ? (ok ? `<details><summary>Ver como resolver</summary>${passos}</details>` : `<p class="rotulo" style="margin-top:14px">Como resolver</p>${passos}`) : ''}
+      <div class="acoes"><button class="btn" id="cont">${ultimo ? 'Ver resultado' : 'Continuar'}</button></div></div>`;
+    $('#cont').focus();
+    $('#cont').onclick = () => { SES.i++; if (SES.i >= SES.qs.length) SES.fim(SES); else mostrarQuestao(); };
+  }
+  document.addEventListener('keydown', (e) => {
+    if (!SES || !document.querySelector('.sessao')) return;
+    if (e.key === 'Enter') {
+      const c = $('#cont'); if (c) { e.preventDefault(); c.click(); return; }
+      const v = $('#verificar'); if (v && !v.disabled) { e.preventDefault(); v.click(); }
+      return;
+    }
+    if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
+    const q = SES.qs[SES.i];
+    if (q && q.t === 'esc' && !SES.feito) {
+      const k = e.key.toLowerCase(), i = '1234'.includes(k) ? +k - 1 : 'abcd'.indexOf(k);
+      if (i >= 0 && i < q.o.length) escolher(i);
+    }
+  });
+
+  /* ---------- relatório e imagem ---------- */
+  function registrarErros(itens, origem) {
+    itens.filter((x) => !x.ok).forEach((x) => S.erros.unshift({ data: hojeTxt(), de: origem, q: x.q, sua: respDada(x.q, x.resp) }));
+    S.erros = S.erros.slice(0, 150);
+  }
+  function relatorio(titulo, notaV, itens) {
+    const err = itens.filter((x) => !x.ok);
+    let s = `${titulo}\nData: ${hojeTxt()}\nNota: ${fmtNota(notaV)} (${itens.length - err.length} de ${itens.length} certas)\n`;
+    s += `\nCertas:\n${itens.filter((x) => x.ok).map((x, i) => `${i + 1}. ${plain(x.q.q)}`).join('\n') || '- nenhuma'}\n`;
+    s += `\nErradas:\n${err.map((x, i) => `${i + 1}. ${plain(x.q.q)}\n   Respondi: ${respDada(x.q, x.resp)}\n   Certo: ${respCerta(x.q)}`).join('\n') || '- nenhuma'}\n`;
+    s += err.length ? '\nExplique por que errei cada uma, passo a passo e de um jeito simples, e me passe 3 exercícios parecidos pra treinar (sem as respostas).' : '\nAcertei tudo. Me passe 5 exercícios um pouco mais difíceis desse conteúdo (sem as respostas).';
+    return s;
+  }
+  function copiar(txt, botao) {
+    const ok = () => { const o = botao.textContent; botao.textContent = 'Copiado'; setTimeout(() => (botao.textContent = o), 2200); };
+    const manual = () => { const t = document.createElement('textarea'); t.className = 'copia'; t.value = txt; t.readOnly = true; botao.parentNode.after(t); t.select(); toast('Selecione o texto abaixo e copie.'); };
+    try { navigator.clipboard.writeText(txt).then(ok, manual); } catch (e) { manual(); }
+  }
+  function quebrar(ctx, txt, larg) {
+    const palavras = String(txt).split(' '); const linhas = []; let l = '';
+    palavras.forEach((p) => { const t = l ? l + ' ' + p : p; if (ctx.measureText(t).width > larg && l) { linhas.push(l); l = p; } else l = t; });
+    if (l) linhas.push(l);
+    return linhas;
+  }
+  function gerarPNG(titulo, notaV, itens) {
+    const W = 1080, M = 72, larg = W - M * 2;
+    const c = document.createElement('canvas'), ctx = c.getContext('2d');
+    const fonte = (peso, tam) => `${peso} ${tam}px Archivo, Arial, sans-serif`;
+    ctx.font = fonte(500, 30);
+    const blocos = itens.map((x, i) => {
+      ctx.font = fonte(600, 30);
+      const q = quebrar(ctx, `${i + 1}. ${plain(x.q.q)}`, larg - 60);
+      ctx.font = fonte(400, 26);
+      const r = x.ok ? [`Sua resposta: ${respDada(x.q, x.resp)}`] : [`Sua resposta: ${respDada(x.q, x.resp)}`, `Certo: ${respCerta(x.q)}`];
+      const rl = r.flatMap((t) => quebrar(ctx, t, larg - 60));
+      return { x, q, rl, h: q.length * 40 + rl.length * 34 + 34 };
+    });
+    const H = 420 + blocos.reduce((a, b) => a + b.h, 0) + 90;
+    c.width = W; c.height = H;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#8e8e8e'; ctx.font = fonte(500, 28); ctx.fillText(`Caderno · ${hojeTxt()}`, M, M + 10);
+    ctx.fillStyle = '#fff'; ctx.font = fonte(800, 56);
+    quebrar(ctx, titulo, larg).forEach((t, i) => ctx.fillText(t, M, M + 84 + i * 62));
+    ctx.font = fonte(800, 150); ctx.fillText(fmtNota(notaV), M, M + 300);
+    const ac = itens.filter((x) => x.ok).length;
+    ctx.fillStyle = '#bdbdbd'; ctx.font = fonte(500, 32); ctx.fillText(`${ac} certa${ac === 1 ? "" : "s"} · ${itens.length - ac} errada${itens.length - ac === 1 ? "" : "s"}`, M + 360, M + 290);
+    let y = 440;
+    ctx.strokeStyle = '#232323'; ctx.lineWidth = 2;
+    blocos.forEach((b) => {
+      ctx.beginPath(); ctx.moveTo(M, y - 30); ctx.lineTo(W - M, y - 30); ctx.stroke();
+      ctx.fillStyle = b.x.ok ? '#6cc08b' : '#e8726a'; ctx.font = fonte(800, 34); ctx.fillText(b.x.ok ? '✓' : '✗', M, y + 4);
+      ctx.fillStyle = '#fff'; ctx.font = fonte(600, 30);
+      b.q.forEach((t, i) => ctx.fillText(t, M + 52, y + 4 + i * 40));
+      let yy = y + 4 + b.q.length * 40;
+      ctx.font = fonte(400, 26);
+      b.rl.forEach((t) => { ctx.fillStyle = t.startsWith('Certo') ? '#6cc08b' : b.x.ok ? '#bdbdbd' : '#e8726a'; ctx.fillText(t, M + 52, yy); yy += 34; });
+      y += b.h;
+    });
+    return c.toDataURL('image/png');
+  }
+
+  /* ---------- telas ---------- */
+  function linhaLicao(l, opts = {}) {
+    const n = nota(l.id), lib = liberada(l.id);
+    let est;
+    if (n != null && n >= NOTA_MIN) est = `<span class="estado ok">${ICON.check} Nota ${fmtNota(n)}</span>`;
+    else if (n != null) est = `<span class="estado baixa">Nota ${fmtNota(n)} · refazer</span>`;
+    else if (lib) est = '<span class="estado">Começar</span>';
+    else est = `<span class="estado trava">${ICON.chave}</span>`;
+    const sub = opts.sub || `${MATERIAS[l.materia]}, ${nomeAno(l.ano)} · ${l.min} min`;
+    return `<button class="item${lib ? '' : ' trancado'}" data-l="${l.id}"><span class="item-txt"><strong>${esc(l.titulo)}</strong><span>${esc(sub)}</span></span><span class="lider"></span>${est}</button>`;
+  }
+  function ligarLinhas() {
+    app.querySelectorAll('[data-l]').forEach((b) => (b.onclick = () => {
+      const l = LICAO[b.dataset.l];
+      if (!liberada(l.id)) { const t = TRILHA[l.materia]; const ant = t[t.indexOf(l) - 1]; toast(`${ICON.chave} Essa abre quando você tirar 6 em "${esc(ant.titulo)}".`); return; }
+      location.hash = '#licao/' + l.id;
+    }));
+  }
+
+  function telaInicio() {
+    const feitas = TODAS.filter((l) => passou(l.id)).length;
+    const notas = Object.values(S.notas).map((x) => x.melhor);
+    const media = notas.length ? notas.reduce((a, b) => a + b, 0) / notas.length : 0;
+    const prox = Object.keys(MATERIAS).map(proxima).filter(Boolean);
+    app.innerHTML = `
+      <h1 class="titulo">Bora estudar</h1>
+      <p class="sub">Cada matéria tem a sua trilha, do 1º ano ao ensino médio. A próxima lição abre quando você tira ${NOTA_MIN} na anterior.</p>
+      <h2 class="secao">Continue de onde parou</h2>
+      <p class="desc">A próxima lição de cada matéria.</p>
+      <div class="lista">${prox.map((l) => linhaLicao(l)).join('') || '<div class="vazio">Você terminou todas as lições disponíveis. Novas lições chegam em breve.</div>'}</div>
+      <h2 class="secao">Provas</h2>
+      <p class="desc">Questões sorteadas do que você já estudou. Os números mudam toda vez.</p>
+      <div class="acoes"><a class="btn" href="#provas">Ver provas</a></div>
+      <h2 class="secao">Seus números</h2>
+      <div class="numeros">
+        <div><span>Lições concluídas</span><span class="lider"></span><b>${feitas} de ${TODAS.length}</b></div>
+        <div><span>Média das notas</span><span class="lider"></span><b>${notas.length ? fmtNota(media) : '—'}</b></div>
+        <div><span>Questões respondidas</span><span class="lider"></span><b>${S.stats.q}</b></div>
+        <div><span>Taxa de acerto</span><span class="lider"></span><b>${S.stats.q ? Math.round((S.stats.a / S.stats.q) * 100) + '%' : '—'}</b></div>
+        <div><span>Provas feitas</span><span class="lider"></span><b>${S.provas.length}</b></div>
+      </div>`;
+    ligarLinhas();
+  }
+
+  function telaAnos(n) {
+    const ano = +n || (Object.keys(MATERIAS).map(proxima).filter(Boolean).reduce((m, l) => Math.min(m, l.ano), 99) % 99) || 1;
+    const doAno = TODAS.filter((l) => l.ano === ano);
+    const completo = (a) => { const ls = TODAS.filter((l) => l.ano === a); return ls.length && ls.every((l) => passou(l.id)); };
+    const plano = PROGRAMA[ano] || {};
+    const mats = Object.keys(MATERIAS).filter((m) => doAno.some((l) => l.materia === m) || plano[m]);
+    const info = ANOS.find((a) => a.n === ano);
+    app.innerHTML = `
+      <h1 class="titulo">${info.nome}</h1>
+      <p class="sub">${info.etapa}. ${doAno.length ? `${doAno.filter((l) => passou(l.id)).length} de ${doAno.length} lições concluídas.` : 'As lições deste ano ainda estão sendo escritas.'}</p>
+      <div class="anos-nav">${ANOS.map((a) => `<button class="chip${completo(a.n) ? ' feito' : ''}" data-ano="${a.n}" aria-pressed="${a.n === ano}">${a.nome}${a.n >= 10 ? ' EM' : ''}</button>`).join('')}</div>
+      ${mats.map((m) => {
+        const ls = doAno.filter((l) => l.materia === m).sort((a, b) => a.pos - b.pos);
+        const emBreve = (plano[m] || []).map((t) => `<div class="item trancado"><span class="item-txt"><strong>${esc(t)}</strong><span>Em breve</span></span><span class="lider"></span><span class="estado trava">em breve</span></div>`).join('');
+        return `<div class="materia-bloco"><h3>${MATERIAS[m]} <span>${ls.length ? `${ls.filter((l) => passou(l.id)).length}/${ls.length}` : ''}</span></h3><div class="lista">${ls.map((l) => linhaLicao(l, { sub: `${l.min} min · ${l.resumo}` })).join('')}${emBreve}</div></div>`;
+      }).join('')}`;
+    app.querySelectorAll('[data-ano]').forEach((b) => (b.onclick = () => (location.hash = '#anos/' + b.dataset.ano)));
+    ligarLinhas();
+  }
+
+  function telaLicao(id) {
+    const l = LICAO[id];
+    if (!l) { location.hash = '#inicio'; return; }
+    if (!liberada(id)) { toast(`${ICON.chave} Essa lição ainda está trancada.`); location.hash = '#anos/' + l.ano; return; }
+    const n = nota(id);
+    app.innerHTML = `<div class="licao">
+      <button class="voltar" id="volta">${ICON.seta} Voltar</button>
+      <p class="meta">${MATERIAS[l.materia]}, ${nomeAno(l.ano)} · ${l.min} min${n != null ? ` · sua melhor nota: ${fmtNota(n)}` : ''}</p>
+      <h1>${esc(l.titulo)}</h1>
+      <p class="resumo-l">${esc(l.resumo || '')}</p>
+      <div class="teoria">${(l.teoria || []).join('')}</div>
+      <div class="acoes"><button class="btn" id="comecar">Começar exercícios</button></div>
+    </div>`;
+    $('#volta').onclick = () => history.back();
+    $('#comecar').onclick = () => {
+      const qs = montar(l.pratica);
+      iniciarSessao({ qs, rotulo: `${MATERIAS[l.materia]} · ${l.titulo}`, fim: (s) => fimLicao(l, s) });
+    };
+  }
+  function fimLicao(l, s) {
+    const notaV = (s.acertos / s.qs.length) * 10;
+    const ant = S.notas[l.id];
+    S.notas[l.id] = { melhor: Math.max(ant ? ant.melhor : 0, notaV), ultima: notaV, tent: (ant ? ant.tent : 0) + 1, data: hojeTxt() };
+    S.stats.q += s.qs.length; S.stats.a += s.acertos;
+    registrarErros(s.itens, `${MATERIAS[l.materia]} · ${l.titulo}`);
+    salvar();
+    const t = TRILHA[l.materia]; const prox = t[t.indexOf(l) + 1];
+    const titulo = `${MATERIAS[l.materia]}, ${nomeAno(l.ano)}: ${l.titulo}`;
+    telaResultado({ titulo, notaV, itens: s.itens, msgExtra: notaV >= NOTA_MIN ? (prox ? `Lição concluída. Liberou: ${prox.titulo}.` : 'Lição concluída.') : `Pra concluir, precisa de ${NOTA_MIN}. Revê a explicação e tenta de novo.`, refazer: () => (location.hash = '#licao/' + l.id + '/' + Date.now()), prox: notaV >= NOTA_MIN && prox ? prox : null, png: false });
+  }
+
+  function telaResultado(o) {
+    SES = null;
+    const err = o.itens.filter((x) => !x.ok);
+    const rel = relatorio(o.titulo, o.notaV, o.itens);
+    app.innerHTML = `<div class="sessao">
+      <p class="meta">${esc(o.titulo)}</p>
+      <div class="nota" style="margin-top:12px">${fmtNota(o.notaV)}</div>
+      <p class="sub">${o.itens.length - err.length} de ${o.itens.length} certas. ${esc(o.msgExtra || '')}</p>
+      <div class="acoes">${o.prox ? `<button class="btn" id="prox">Próxima lição</button>` : `<a class="btn" href="#inicio">Voltar pro início</a>`}<button class="btn-sec" id="refazer">${o.png ? 'Fazer outra prova' : 'Refazer'}</button><button class="btn-sec" id="copiar">Copiar relatório</button></div>
+      ${o.png ? `<h2 class="secao">Imagem da prova</h2><p class="desc">Baixa a imagem e me manda. No iPhone, toca e segura na imagem pra salvar.</p><img class="img-prova" id="img" alt="Resultado da prova"><div class="acoes"><a class="btn" id="baixar" download="prova-${Date.now()}.png">Baixar PNG</a></div>` : ''}
+      ${err.length ? `<h2 class="secao">O que você errou</h2>${err.map((x) => `<div class="erro-card"><b>${esc(plain(x.q.q))}</b><div class="s">Sua resposta: ${esc(respDada(x.q, x.resp))}</div><div class="c">Resposta certa: ${esc(respCerta(x.q))}</div>${x.q.res.length ? `<ol class="passos">${x.q.res.map((p) => `<li>${p}</li>`).join('')}</ol>` : ''}</div>`).join('')}` : ''}
+    </div>`;
+    if (o.prox) $('#prox').onclick = () => (location.hash = '#licao/' + o.prox.id);
+    $('#refazer').onclick = o.refazer;
+    $('#copiar').onclick = (e) => copiar(rel, e.currentTarget);
+    if (o.png) { const url = gerarPNG(o.titulo, o.notaV, o.itens); $('#img').src = url; $('#baixar').href = url; }
+    window.scrollTo(0, 0);
+  }
+
+  /* ---------- provas ---------- */
+  function questoesDaProva(licoes, total) {
+    let pool = [];
+    licoes.forEach((l) => { const qs = AF.shuf(montar(l.pratica).concat(montar(l.desafio || []))); qs.slice(0, 3).forEach((q) => { q.de = `${MATERIAS[l.materia]}: ${l.titulo}`; pool.push(q); }); });
+    pool = AF.shuf(pool);
+    const porLicao = {}; const out = [];
+    for (const q of pool) { if (out.length >= total) break; const k = q.de; if ((porLicao[k] || 0) >= Math.ceil(total / licoes.length) + 1) continue; porLicao[k] = (porLicao[k] || 0) + 1; out.push(q); }
+    return out;
+  }
+  function telaProvas() {
+    const feitas = TODAS.filter((l) => passou(l.id));
+    const anosComConteudo = ANOS.filter((a) => TODAS.some((l) => l.ano === a.n));
+    app.innerHTML = `
+      <h1 class="titulo">Provas</h1>
+      <p class="sub">As questões são sorteadas entre as lições que você já concluiu, e os números mudam toda vez. No fim, sai uma imagem PNG com a nota, as certas e as erradas pra você me mandar.</p>
+      <h2 class="secao">Prova rápida</h2>
+      <p class="desc">15 questões misturando tudo o que você já estudou. Libera com 3 lições concluídas.</p>
+      <div class="acoes"><button class="btn" id="rapida" ${feitas.length < 3 ? 'disabled' : ''}>Fazer prova rápida</button>${feitas.length < 3 ? `<span class="desc">${feitas.length} de 3 lições</span>` : ''}</div>
+      <h2 class="secao">Prova do ano</h2>
+      <p class="desc">20 questões de todas as matérias do ano. Libera quando você conclui todas as lições daquele ano.</p>
+      <div class="lista">${anosComConteudo.map((a) => { const ls = TODAS.filter((l) => l.ano === a.n); const ok = ls.filter((l) => passou(l.id)).length; const lib = ok === ls.length; const ult = S.provas.filter((p) => p.ano === a.n).map((p) => p.nota); return `<button class="item${lib ? '' : ' trancado'}" data-prova="${a.n}"><span class="item-txt"><strong>Prova do ${a.nome}</strong><span>${ok} de ${ls.length} lições concluídas</span></span><span class="lider"></span>${lib ? `<span class="estado${ult.length ? ' ok' : ''}">${ult.length ? `Melhor: ${fmtNota(Math.max(...ult))}` : 'Fazer'}</span>` : `<span class="estado trava">${ICON.chave}</span>`}</button>`; }).join('')}</div>
+      <h2 class="secao">Histórico</h2>
+      ${S.provas.length ? `<div class="numeros">${S.provas.slice(0, 12).map((p) => `<div><span>${esc(p.titulo)}<br><small style="color:var(--cinza)">${p.data}</small></span><span class="lider"></span><b>${fmtNota(p.nota)}</b></div>`).join('')}</div>` : '<div class="vazio">Nenhuma prova feita ainda.</div>'}`;
+    if (feitas.length >= 3) $('#rapida').onclick = () => fazerProva(feitas, 15, 'Prova rápida', null);
+    app.querySelectorAll('[data-prova]').forEach((b) => (b.onclick = () => {
+      const n = +b.dataset.prova, ls = TODAS.filter((l) => l.ano === n);
+      if (!ls.every((l) => passou(l.id))) { toast(`${ICON.chave} Conclua todas as lições do ${nomeAno(n)} pra liberar a prova.`); return; }
+      fazerProva(ls, 20, `Prova do ${nomeAno(n)}`, n);
+    }));
+  }
+  function fazerProva(licoes, total, titulo, ano) {
+    location.hash = '#prova';
+    const qs = questoesDaProva(licoes, total);
+    setTimeout(() => iniciarSessao({ qs, rotulo: titulo, semDica: true, fim: (s) => {
+      const notaV = (s.acertos / s.qs.length) * 10;
+      S.provas.unshift({ titulo, ano, nota: notaV, data: hojeTxt() }); S.provas = S.provas.slice(0, 60);
+      S.stats.q += s.qs.length; S.stats.a += s.acertos;
+      registrarErros(s.itens, titulo);
+      salvar();
+      telaResultado({ titulo, notaV, itens: s.itens, msgExtra: notaV >= 7 ? 'Mandou bem.' : notaV >= 5 ? 'Bom caminho. Revê os erros.' : 'Revê as lições dos erros e tenta de novo.', refazer: () => fazerProva(licoes, total, titulo, ano), png: true });
+    } }), 0);
+  }
+
+  /* ---------- erros ---------- */
+  function telaErros() {
+    const E = S.erros;
+    app.innerHTML = `
+      <h1 class="titulo">Caderno de erros</h1>
+      <p class="sub">Tudo o que você errou fica aqui. Treinar os erros sorteia até 10 deles, e o que você acertar sai da lista.</p>
+      <div class="acoes"><button class="btn" id="treinar" ${E.length ? '' : 'disabled'}>Treinar meus erros (${E.length})</button>${E.length ? '<button class="btn-sec" id="limpar">Limpar lista</button>' : ''}</div>
+      ${E.length ? E.slice(0, 60).map((e) => `<div class="erro-card"><p class="m">${esc(e.data)} · ${esc(e.de)}</p><b>${esc(plain(e.q.q))}</b><div class="s">Sua resposta: ${esc(e.sua)}</div><div class="c">Resposta certa: ${esc(respCerta(e.q))}</div>${(e.q.res || []).length ? `<details><summary>Ver como resolver</summary><ol class="passos">${e.q.res.map((p) => `<li>${p}</li>`).join('')}</ol></details>` : ''}</div>`).join('') : '<div class="vazio">Nenhum erro guardado. Os erros das lições e provas aparecem aqui.</div>'}`;
+    if (E.length) {
+      $('#treinar').onclick = () => {
+        const sel = AF.shuf(E.map((e, i) => [e, i])).slice(0, 10);
+        location.hash = '#treino';
+        setTimeout(() => iniciarSessao({ qs: sel.map(([e]) => preparar(e.q)), rotulo: 'Treino de erros', fim: (s) => {
+          const resolvidas = new Set(s.itens.map((x, i) => (x.ok ? sel[i][0] : null)).filter(Boolean));
+          S.erros = S.erros.filter((e) => !resolvidas.has(e));
+          S.stats.q += s.qs.length; S.stats.a += s.acertos; salvar();
+          telaResultado({ titulo: 'Treino de erros', notaV: (s.acertos / s.qs.length) * 10, itens: s.itens, msgExtra: `${resolvidas.size} saíram da lista de erros.`, refazer: () => (location.hash = '#erros'), png: false });
+        } }), 0);
+      };
+      $('#limpar').onclick = (e) => { if (e.currentTarget.dataset.ok) { S.erros = []; salvar(); telaErros(); } else { e.currentTarget.dataset.ok = 1; e.currentTarget.textContent = 'Toque de novo pra confirmar'; } };
+    }
+  }
+
+  /* ---------- ajustes ---------- */
+  function telaAjustes() {
+    app.innerHTML = `
+      <h1 class="titulo">Ajustes</h1>
+      <p class="sub">O progresso fica salvo neste navegador. Pra continuar em outro aparelho (do PC pro iPhone, por exemplo), copia o código de backup aqui e cola no outro.</p>
+      <h2 class="secao">Backup</h2>
+      <div class="acoes"><button class="btn" id="exp">Copiar código de backup</button></div>
+      <textarea class="copia" id="imp" placeholder="Cole aqui o código de backup do outro aparelho"></textarea>
+      <div class="acoes"><button class="btn-sec" id="rest">Restaurar backup</button></div>
+      <h2 class="secao">Recomeçar</h2>
+      <p class="desc">Apaga notas, erros e provas deste navegador.</p>
+      <div class="acoes"><button class="btn-sec" id="zerar">Apagar todo o progresso</button></div>`;
+    $('#exp').onclick = (e) => copiar(btoa(unescape(encodeURIComponent(JSON.stringify(S)))), e.currentTarget);
+    $('#rest').onclick = () => { try { const d = JSON.parse(decodeURIComponent(escape(atob($('#imp').value.trim())))); if (!d.notas) throw 0; S = Object.assign({ notas: {}, erros: [], provas: [], stats: { q: 0, a: 0 } }, d); salvar(); toast('Backup restaurado.'); location.hash = '#inicio'; } catch (e) { toast('Esse código não é um backup válido. Copia de novo no outro aparelho.'); } };
+    $('#zerar').onclick = (e) => { if (e.currentTarget.dataset.ok) { S = { notas: {}, erros: [], provas: [], stats: { q: 0, a: 0 } }; salvar(); toast('Progresso apagado.'); location.hash = '#inicio'; } else { e.currentTarget.dataset.ok = 1; e.currentTarget.textContent = 'Toque de novo pra confirmar'; } };
+  }
+
+  /* ---------- rotas ---------- */
+  function rota() {
+    const [p, a] = (location.hash.slice(1) || 'inicio').split('/');
+    document.querySelectorAll('#nav a').forEach((x) => (x.getAttribute('data-r') === p || (p === 'licao' && x.dataset.r === 'anos') ? x.setAttribute('aria-current', 'page') : x.removeAttribute('aria-current')));
+    if ((p === 'prova' || p === 'treino') && SES) return;
+    if (p !== 'prova' && p !== 'treino') SES = null;
+    window.scrollTo(0, 0);
+    if (p === 'anos') telaAnos(a);
+    else if (p === 'licao') telaLicao(a);
+    else if (p === 'provas' || p === 'prova') telaProvas();
+    else if (p === 'erros' || p === 'treino') telaErros();
+    else if (p === 'ajustes') telaAjustes();
+    else telaInicio();
+  }
+  window.addEventListener('hashchange', rota);
+  rota();
+})();
